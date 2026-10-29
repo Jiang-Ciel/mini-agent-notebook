@@ -1,0 +1,4 @@
+openai>=1.68,<3
+mcp>=1.12,<2
+jupyterlab>=4,<5
+nbformat>=5.10,<6
