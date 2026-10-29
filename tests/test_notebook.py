@@ -166,6 +166,13 @@ class NotebookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(memory.turns, before)
         self.assertEqual(memory.summary, '')
 
+    async def test_model_failure_unwrapped_after_real_mcp_cleanup(self):
+        cause = RuntimeError('模型服务过载')
+        with self.assertRaises(RuntimeError) as caught:
+            async with self.ns['mcp_tools']():
+                raise cause
+        self.assertIs(caught.exception, cause)
+
     async def test_skill_allowlist(self):
         self.assertIn('mcp_multiply', self.ns['load_skill']('calc'))
         with self.assertRaises(KeyError): self.ns['load_skill']('../../private')

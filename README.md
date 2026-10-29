@@ -50,3 +50,7 @@ python -m unittest discover -s tests -v
 ```bash
 python -m jupyter nbconvert --clear-output --inplace mini_agent.ipynb
 ```
+
+## 模型服务过载
+
+429/503 仅重试模型请求（最多 4 次），指数退避并尊重 Retry-After；不会重跑已执行的工具。长于 20 秒的服务等待要求直接提示稍后重试。MCP 单一异常组会展开为原始错误，多根因异常仍保留。持续 ServerOverloaded 需等待服务恢复或检查配额/负载；重试不保证解决过载。重试计入本轮 90 秒总超时。
