@@ -60,3 +60,7 @@ python -m jupyter nbconvert --clear-output --inplace mini_agent.ipynb
 Tool/ReAct/MCP 单元默认打印：LLM 工具 schema → 模型真实 output → 宿主分派 → 本地工具或 MCP tools/call → function_call_output → 下一次 LLM 回答。
 MCP 工具对模型仍是普通 function_call，协议请求由宿主执行。日志不显示 Key、隐藏推理或加密载荷；任务参数和结果仍可能敏感，分享前清空输出。
 `import tracing; tracing.ENABLED = False` 可关闭展示。
+
+## Request / Response 分区
+
+Notebook 用蓝/绿卡片及同一 `LLM #编号` 配对请求与响应，紫色工具/MCP事件沿用来源编号。Request 展示实际发送的完整 body（含 input 与 tools），JSON 可折叠、滚动查看。凭据、内部推理与加密载荷隐藏；任务文本和结果仍可能敏感。重试沿用本轮编号。终端使用分隔线输出；`tracing.HTML_MODE = False` 可切换为纯文本。

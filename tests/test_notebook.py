@@ -80,9 +80,18 @@ class NotebookTests(unittest.IsolatedAsyncioTestCase):
                                http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))) as c:
             self.ns['client'] = c
             try:
-                answer = await self.ns['ask'](self.ns['messages']('test'), [self.ns['ADD']])
+                capture = io.StringIO()
+                with redirect_stdout(capture):
+                    answer = await self.ns['ask'](self.ns['messages']('test'), [self.ns['ADD']])
             finally:
                 self.ns['client'] = real
+        import re
+        badges = re.findall(r'LLM #(\d+)', capture.getvalue())
+        self.assertEqual(len(badges), 2)
+        self.assertEqual(badges[0], badges[1])
+        self.assertIn('"content": "test"', capture.getvalue())
+        self.assertIn('REQUEST →', capture.getvalue())
+        self.assertIn('RESPONSE ←', capture.getvalue())
         self.assertEqual(answer.output_text, 'ok')
         url, body = seen[0]
         self.assertEqual(url, 'https://custom.example/v1/responses')

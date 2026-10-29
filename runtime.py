@@ -4,6 +4,7 @@ import random
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from openai import APIStatusError
+from tracing import show
 
 async def create_response(client, **kwargs):
     # Retry only the model request, never replay a whole agent/tool workflow.
@@ -36,7 +37,10 @@ async def create_response(client, **kwargs):
                 raise RuntimeError(
                     "模型服务要求等待超过 20 秒，本轮停止；请按 Retry-After 稍后重试。"
                 ) from exc
-            print(f"[模型 HTTP {exc.status_code}，{delay:.1f} 秒后重试 {attempt + 1}/3]")
+            show("RETRY · 同一 LLM 请求退避重试", {
+                "http_status": exc.status_code, "wait_seconds": round(delay, 1),
+                "retry": attempt + 1, "max_retries": 3,
+            }, kind="error")
             await asyncio.sleep(delay)
 
 def single_cause(group):
