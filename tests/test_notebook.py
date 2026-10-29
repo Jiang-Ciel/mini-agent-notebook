@@ -1,3 +1,8 @@
+import sys
+from pathlib import Path
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
 import ast
 import asyncio
 import json
@@ -14,7 +19,7 @@ from openai import AsyncOpenAI
 from openai.types.responses import Response
 
 ROOT = Path(__file__).resolve().parents[1]
-NB = nbformat.read(ROOT / 'mini_agent.ipynb', as_version=4)
+NB = nbformat.read(ROOT / 'lecture/mini_agent.ipynb', as_version=4)
 
 def response_data(content=None, calls=None, reasoning=False, status='completed', refusal=False):
     output = []
@@ -40,7 +45,7 @@ def call(a=17, b=25, name='add', id='call_1'):
 class NotebookTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.old_cwd = Path.cwd()
-        os.chdir(ROOT)
+        os.chdir(ROOT / 'lecture')
         self.env = patch.dict(os.environ, {
             'OPENAI_BASE_URL': 'https://offline.example/v1',
             'OPENAI_API_KEY': 'dummy-not-a-real-key', 'OPENAI_MODEL': 'test-model',
@@ -61,6 +66,18 @@ class NotebookTests(unittest.IsolatedAsyncioTestCase):
         await self.ns['client'].close()
         self.env.stop()
         os.chdir(self.old_cwd)
+
+    async def test_paths_from_lecture_and_project_root(self):
+        self.assertEqual(self.ns['PROJECT_ROOT'], ROOT)
+        self.assertEqual(self.ns['SRC_DIR'], ROOT / 'src')
+        self.assertEqual(self.ns['SKILLS']['calc'], ROOT / 'skills/calc.md')
+        os.chdir(ROOT)
+        namespace = {}
+        exec(NB.cells[2].source, namespace)
+        try:
+            self.assertEqual(namespace['PROJECT_ROOT'], ROOT)
+        finally:
+            await namespace['client'].close()
 
     async def test_notebook_structure_and_clean_outputs(self):
         nbformat.validate(NB)

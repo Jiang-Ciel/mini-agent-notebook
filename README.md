@@ -2,7 +2,7 @@
 
 用 **OpenAI Python SDK Responses API + 自定义兼容接口**，逐步理解 Agent。
 
-[打开 Notebook](mini_agent.ipynb)：LLM → Prompt → Function Calling/Tool → ReAct → MCP → Skill → Compaction。
+[打开 Notebook](lecture/mini_agent.ipynb)：LLM → Prompt → Function Calling/Tool → ReAct → MCP → Skill → Compaction。
 
 ## 运行
 
@@ -17,7 +17,7 @@ python -m pip install -r requirements.txt
 export OPENAI_BASE_URL="https://your-model-endpoint.example/v1"
 export OPENAI_API_KEY="你的 Key"
 export OPENAI_MODEL="支持工具调用的模型名"
-python -m jupyterlab mini_agent.ipynb
+python -m jupyterlab lecture/mini_agent.ipynb
 ```
 
 `base_url` 是接口根路径，不要填 `/responses`。接口需支持 `/v1/responses`、`function_call` 和 `function_call_output`；仅兼容 Chat Completions 不够。Key 放环境变量或被 Git 忽略的本地 `.env`，Notebook 自动加载 `.env`（已有环境变量优先）；不提交输出或凭据。
@@ -48,7 +48,7 @@ python -m unittest discover -s tests -v
 提交前清空 Notebook 输出：
 
 ```bash
-python -m jupyter nbconvert --clear-output --inplace mini_agent.ipynb
+python -m jupyter nbconvert --clear-output --inplace lecture/mini_agent.ipynb
 ```
 
 ## 模型服务过载
@@ -64,3 +64,14 @@ MCP 工具对模型仍是普通 function_call，协议请求由宿主执行。�
 ## Request / Response 分区
 
 Notebook 用蓝/绿卡片及同一 `LLM #编号` 配对请求与响应，紫色工具/MCP事件沿用来源编号。Request 展示实际发送的完整 body（含 input 与 tools），JSON 可折叠、滚动查看。凭据、内部推理与加密载荷隐藏；任务文本和结果仍可能敏感。重试沿用本轮编号。终端使用分隔线输出；`tracing.HTML_MODE = False` 可切换为纯文本。
+
+## 目录
+
+```text
+lecture/mini_agent.ipynb   # 教程 Notebook
+src/                      # runtime.py、tracing.py、math_server.py
+skills/                   # calc.md
+tests/                   # 离线测试
+```
+
+Notebook 自动定位项目根目录，从根目录或 lecture/ 启动均可；`.env` 与 Skill 始终从根目录读取，MCP server 始终从 src/ 启动。
