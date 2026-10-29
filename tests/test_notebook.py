@@ -2,6 +2,8 @@ import ast
 import asyncio
 import json
 import os
+import io
+from contextlib import redirect_stdout
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -172,6 +174,39 @@ class NotebookTests(unittest.IsolatedAsyncioTestCase):
             async with self.ns['mcp_tools']():
                 raise cause
         self.assertIs(caught.exception, cause)
+
+    async def test_visible_llm_then_real_mcp_then_result_trace(self):
+        steps = iter([reply(calls=[call(a=42, b=3, name='mcp_multiply')]),
+                      reply(content='126')])
+        async def fake(work, tools=None):
+            from tracing import show, show_response
+            show('LLM 请求：Responses API', {'tools': tools})
+            result = next(steps)
+            show_response(result)
+            return result
+        self.ns['ask'] = fake
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            async with self.ns['mcp_tools']() as (tools, execute):
+                answer, trace = await self.ns['agent'](self.ns['messages']('multiply'), tools, execute)
+        text = capture.getvalue()
+        markers = ['LLM 请求：Responses API', 'LLM 返回：真实 response.output',
+                   '宿主分派：模型调用意图 → 执行器', 'MCP 实际请求：tools/call',
+                   'MCP tools/call 响应', '准备回传 LLM：function_call_output',
+                   'ReAct 结束：模型返回答案而非工具调用']
+        positions = [text.index(m) for m in markers]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(answer, '126')
+        self.assertIn('126', trace[1]['output'])
+
+    async def test_visible_output_hides_encrypted_reasoning(self):
+        from tracing import show_response
+        capture = io.StringIO()
+        with redirect_stdout(capture):
+            show_response(reply(calls=[call()], reasoning=True))
+        self.assertIn('function_call', capture.getvalue())
+        self.assertIn('call_1', capture.getvalue())
+        self.assertNotIn('opaque-test', capture.getvalue())
 
     async def test_skill_allowlist(self):
         self.assertIn('mcp_multiply', self.ns['load_skill']('calc'))

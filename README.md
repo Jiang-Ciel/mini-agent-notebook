@@ -54,3 +54,9 @@ python -m jupyter nbconvert --clear-output --inplace mini_agent.ipynb
 ## 模型服务过载
 
 429/503 仅重试模型请求（最多 4 次），指数退避并尊重 Retry-After；不会重跑已执行的工具。长于 20 秒的服务等待要求直接提示稍后重试。MCP 单一异常组会展开为原始错误，多根因异常仍保留。持续 ServerOverloaded 需等待服务恢复或检查配额/负载；重试不保证解决过载。重试计入本轮 90 秒总超时。
+
+## 观察真实调用
+
+Tool/ReAct/MCP 单元默认打印：LLM 工具 schema → 模型真实 output → 宿主分派 → 本地工具或 MCP tools/call → function_call_output → 下一次 LLM 回答。
+MCP 工具对模型仍是普通 function_call，协议请求由宿主执行。日志不显示 Key、隐藏推理或加密载荷；任务参数和结果仍可能敏感，分享前清空输出。
+`import tracing; tracing.ENABLED = False` 可关闭展示。
