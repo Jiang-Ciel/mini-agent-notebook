@@ -9,21 +9,31 @@ from unittest.mock import patch
 import httpx
 import nbformat
 from openai import AsyncOpenAI
-from openai.types.chat import ChatCompletion
+from openai.types.responses import Response
 
 ROOT = Path(__file__).resolve().parents[1]
 NB = nbformat.read(ROOT / 'mini_agent.ipynb', as_version=4)
 
-def reply(content=None, calls=None):
-    return ChatCompletion.model_validate({
-        'id': 'offline', 'object': 'chat.completion', 'created': 0, 'model': 'test',
-        'choices': [{'index': 0, 'finish_reason': 'tool_calls' if calls else 'stop',
-                     'message': {'role': 'assistant', 'content': content, 'tool_calls': calls}}],
-    }).choices[0].message
+def response_data(content=None, calls=None, reasoning=False, status='completed', refusal=False):
+    output = []
+    if reasoning:
+        output.append({'id': 'rs_1', 'type': 'reasoning', 'summary': [], 'encrypted_content': 'opaque-test'})
+    output.extend(calls or [])
+    if content is not None or refusal:
+        part = {'type': 'refusal', 'refusal': 'denied'} if refusal else {
+            'type': 'output_text', 'text': content, 'annotations': []}
+        output.append({'id': 'msg_1', 'type': 'message', 'role': 'assistant',
+                       'status': 'completed', 'content': [part]})
+    return {'id': 'resp_test', 'created_at': 0, 'model': 'test', 'object': 'response',
+            'status': status, 'output': output, 'parallel_tool_calls': True,
+            'tool_choice': 'auto', 'tools': []}
+
+def reply(**kwargs):
+    return Response.model_validate(response_data(**kwargs))
 
 def call(a=17, b=25, name='add', id='call_1'):
-    return {'id': id, 'type': 'function', 'function': {
-        'name': name, 'arguments': json.dumps({'a': a, 'b': b})}}
+    return {'id': 'fc_' + id, 'call_id': id, 'type': 'function_call', 'name': name,
+            'arguments': json.dumps({'a': a, 'b': b}), 'status': 'completed'}
 
 class NotebookTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -58,15 +68,11 @@ class NotebookTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIsNone(cell.execution_count)
                 compile(cell.source, '<cell>', 'exec', flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
 
-    async def test_custom_endpoint_wire_format(self):
+    async def test_custom_responses_endpoint_wire_format(self):
         seen = []
         def handler(request):
             seen.append((str(request.url), json.loads(request.content)))
-            return httpx.Response(200, json={
-                'id': 'test', 'object': 'chat.completion', 'created': 0, 'model': 'test',
-                'choices': [{'index': 0, 'finish_reason': 'stop',
-                             'message': {'role': 'assistant', 'content': 'ok'}}],
-            })
+            return httpx.Response(200, json=response_data(content='ok'))
         real = self.ns['client']
         async with AsyncOpenAI(base_url='https://custom.example/v1', api_key='dummy',
                                http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler))) as c:
@@ -75,13 +81,20 @@ class NotebookTests(unittest.IsolatedAsyncioTestCase):
                 answer = await self.ns['ask'](self.ns['messages']('test'), [self.ns['ADD']])
             finally:
                 self.ns['client'] = real
-        self.assertEqual(answer.content, 'ok')
-        self.assertEqual(seen[0][0], 'https://custom.example/v1/chat/completions')
-        self.assertEqual(seen[0][1]['model'], 'test-model')
-        self.assertEqual(seen[0][1]['tools'][0]['function']['name'], 'add')
+        self.assertEqual(answer.output_text, 'ok')
+        url, body = seen[0]
+        self.assertEqual(url, 'https://custom.example/v1/responses')
+        self.assertEqual(body['model'], 'test-model')
+        self.assertEqual(body['input'][1]['content'], 'test')
+        self.assertFalse(body['store'])
+        self.assertEqual(body['include'], ['reasoning.encrypted_content'])
+        self.assertEqual(body['tools'][0]['name'], 'add')
+        self.assertNotIn('function', body['tools'][0])
+        self.assertNotIn('messages', body)
 
-    async def test_dependent_tool_loop(self):
-        steps = iter([reply(calls=[call()]), reply(calls=[call(a=42, b=8, id='call_2')]), reply('50')])
+    async def test_dependent_loop_preserves_reasoning(self):
+        steps = iter([reply(calls=[call()], reasoning=True),
+                      reply(calls=[call(a=42, b=8, id='call_2')]), reply(content='50')])
         seen = []
         async def fake(work, tools=None):
             seen.append(list(work)); return next(steps)
@@ -89,16 +102,21 @@ class NotebookTests(unittest.IsolatedAsyncioTestCase):
         initial = self.ns['messages']('compute')
         answer, trace = await self.ns['agent'](initial, [self.ns['ADD']], self.ns['local_tool'])
         self.assertEqual(answer, '50')
-        self.assertEqual(len(trace), 5)
+        self.assertEqual(len(trace), 6)
         self.assertEqual(len(initial), 2)
-        self.assertEqual(json.loads(seen[1][-1]['content'])['result'], 42)
-        self.assertEqual(json.loads(seen[2][-1]['content'])['result'], 50)
+        self.assertEqual(seen[1][-3]['type'], 'reasoning')
+        self.assertEqual(seen[1][-3]['encrypted_content'], 'opaque-test')
+        self.assertEqual(seen[1][-2]['type'], 'function_call')
+        self.assertEqual(seen[1][-1]['call_id'], 'call_1')
+        self.assertEqual(json.loads(seen[1][-1]['output'])['result'], 42)
+        self.assertEqual(json.loads(seen[2][-1]['output'])['result'], 50)
 
     async def test_errors_and_call_pairing(self):
-        calls = reply(calls=[call(), call(name='delete', id='call_2')]).tool_calls
+        calls = self.ns['calls'](reply(calls=[call(), call(name='delete', id='call_2')]))
         observed = await self.ns['observe'](calls, self.ns['local_tool'])
-        self.assertEqual([r['tool_call_id'] for r in observed], ['call_1', 'call_2'])
-        self.assertFalse(json.loads(observed[1]['content'])['ok'])
+        self.assertEqual([r['call_id'] for r in observed], ['call_1', 'call_2'])
+        self.assertTrue(all(r['type'] == 'function_call_output' for r in observed))
+        self.assertFalse(json.loads(observed[1]['output'])['ok'])
         for args in [{'a': True, 'b': 3}, {'a': 1}, []]:
             with self.assertRaises(ValueError): self.ns['validate'](args)
 
@@ -108,21 +126,31 @@ class NotebookTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(RuntimeError, '上限'):
             await self.ns['agent']([], [self.ns['ADD']], self.ns['local_tool'], max_steps=2)
 
+    async def test_incomplete_and_refusal_rejected(self):
+        real = self.ns['client']
+        for data in [response_data(content='partial', status='incomplete'), response_data(refusal=True)]:
+            async with AsyncOpenAI(api_key='dummy', http_client=httpx.AsyncClient(
+                    transport=httpx.MockTransport(lambda req: httpx.Response(200, json=data)))) as c:
+                self.ns['client'] = c
+                try:
+                    with self.assertRaises(RuntimeError): await self.ns['ask']([])
+                finally:
+                    self.ns['client'] = real
+
     async def test_real_mcp_connection(self):
         async with self.ns['mcp_tools']() as (tools, execute):
-            self.assertEqual([t['function']['name'] for t in tools], ['add', 'mcp_multiply'])
+            self.assertEqual([t['name'] for t in tools], ['add', 'mcp_multiply'])
             result = await execute('mcp_multiply', {'a': 42, 'b': 3})
             self.assertIn('126', json.dumps(result))
             with self.assertRaises(ValueError): await execute('delete', {})
 
     async def test_compaction_preserves_recent_turns(self):
         memory = self.ns['Memory'](limit=1)
-        turns = [[{'role': 'user', 'content': str(i)},
-                  {'role': 'assistant', 'tool_calls': [call(id=f'c{i}')]},
-                  {'role': 'tool', 'tool_call_id': f'c{i}', 'content': '42'},
-                  {'role': 'assistant', 'content': '42'}] for i in range(4)]
+        turns = [[{'role': 'user', 'content': str(i)}, call(id=f'c{i}'),
+                  {'type': 'function_call_output', 'call_id': f'c{i}', 'output': '42'},
+                  *self.ns['output_items'](reply(content='42'))] for i in range(4)]
         memory.turns = turns.copy()
-        async def fake(work, tools=None): return reply('旧计算结果为42。')
+        async def fake(work, tools=None): return reply(content='旧计算结果为42。')
         self.ns['ask'] = fake
         self.assertTrue(await memory.compact())
         self.assertEqual(memory.turns, turns[-2:])
@@ -132,7 +160,7 @@ class NotebookTests(unittest.IsolatedAsyncioTestCase):
         memory = self.ns['Memory'](limit=1)
         memory.turns = [[{'role': 'user', 'content': 'some previous data'}]] * 3
         before = memory.turns.copy()
-        async def fake(work, tools=None): return reply('')
+        async def fake(work, tools=None): return reply(content='')
         self.ns['ask'] = fake
         with self.assertRaises(RuntimeError): await memory.compact()
         self.assertEqual(memory.turns, before)
